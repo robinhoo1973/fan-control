@@ -7,8 +7,10 @@
 # ============================================
 
 # 语言设置
-LANG="en"
+# 全局语言相关变量
+LANG="en"  # 默认语言
 declare -A MSG
+LANG_SET_BY_CLI=0  # 标记是否通过命令行参数设置语言
 
 # 英文消息
 declare -A EN_MSG=(
@@ -207,22 +209,57 @@ set_language() {
     fi
 }
 
-# 初始化语言
+# 初始化语言（重新设计）
 init_language() {
-    # 检查是否有语言参数
-    for arg in "$@"; do
+    # 第一步：设置默认语言
+    LANG="en"
+    set_language
+    
+    # 第二步：如果有配置文件，从配置文件加载语言设置（但此时不立即应用）
+    if [ -f "$CONFIG_FILE" ]; then
+        # 只读取LANGUAGE变量，不执行其他配置
+        local config_lang=$(grep -E '^LANGUAGE="?(en|cn)"?' "$CONFIG_FILE" | cut -d'"' -f2)
+        if [ -n "$config_lang" ]; then
+            CONFIG_LANG="$config_lang"
+        fi
+    fi
+    
+    # 第三步：解析命令行参数
+    local lang_from_cli=""
+    for ((i=1; i<=$#; i++)); do
+        local arg="${!i}"
+        local next_arg=""
+        if [ $i -lt $# ]; then
+            next_arg="${@:$((i+1)):1}"
+        fi
+        
         if [ "$arg" = "--lang" ] || [ "$arg" = "-l" ]; then
-            shift
-            if [ "$1" = "cn" ] || [ "$1" = "zh" ]; then
-                LANG="cn"
-            elif [ "$1" = "en" ]; then
-                LANG="en"
+            if [ -n "$next_arg" ]; then
+                if [ "$next_arg" = "cn" ] || [ "$next_arg" = "zh" ]; then
+                    lang_from_cli="cn"
+                elif [ "$next_arg" = "en" ]; then
+                    lang_from_cli="en"
+                fi
             fi
-            break
         fi
     done
-    set_language
+    
+    # 第四步：按照优先级设置语言（命令行参数 > 配置文件 > 默认值）
+    if [ -n "$lang_from_cli" ]; then
+        LANG="$lang_from_cli"
+        LANG_SET_BY_CLI=1
+        set_language
+        if [ "$LANG" = "cn" ]; then
+            echo "已通过命令行参数设置语言为中文"
+        else
+            echo "Language set to English via command line"
+        fi
+    elif [ -n "$CONFIG_LANG" ]; then
+        LANG="$CONFIG_LANG"
+        set_language
+    fi
 }
+
 
 # 显示消息
 show_msg() {
@@ -331,10 +368,27 @@ SEPARATOR=$(printf "=%.0s" $(seq 1 $SEPARATOR_LENGTH))
 # 核心功能函数
 # ============================================
 
-# 加载配置
+#修改 load_config 函数，避免重复设置语言
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
-        source "$CONFIG_FILE"
+        # 如果是通过命令行参数设置的语言，就不从配置文件加载语言设置
+        if [ $LANG_SET_BY_CLI -eq 0 ]; then
+            source "$CONFIG_FILE"
+            
+            # 如果配置中有语言设置，且命令行没有设置，则应用配置中的语言
+            if [ -n "$LANGUAGE" ]; then
+                LANG="$LANGUAGE"
+                set_language
+            fi
+        else
+            # 命令行参数已设置语言，只加载其他配置，不覆盖语言
+            # 临时保存当前语言
+            local current_lang="$LANG"
+            source "$CONFIG_FILE"
+            # 恢复命令行设置的语言
+            LANG="$current_lang"
+            set_language
+        fi
         
         # 加载检测到的风扇范围（如果存在）
         if [ -f "$RANGE_CACHE_FILE" ]; then
@@ -349,6 +403,7 @@ load_config() {
         fi
     fi
 }
+
 
 # 检测硬件
 detect_hardware() {
@@ -935,17 +990,19 @@ declare -A CONFIG_RECOMMENDATIONS
 # 初始化配置项
 init_config_items() {
     # 配置项名称 -> 变量名映射
-    CONFIG_ITEMS[1]="HIGH_TEMP"
-    CONFIG_ITEMS[2]="LOW_TEMP"
-    CONFIG_ITEMS[3]="MIN_SPEED"
-    CONFIG_ITEMS[4]="MAX_SPEED"
-    CONFIG_ITEMS[5]="CHECK_INTERVAL"
-    CONFIG_ITEMS[6]="AUTO_CONTROL"
-    CONFIG_ITEMS[7]="MANUAL_SPEED"
-    CONFIG_ITEMS[8]="ENABLE_LOGGING"
+    CONFIG_ITEMS[1]="LANGUAGE"
+    CONFIG_ITEMS[2]="HIGH_TEMP"
+    CONFIG_ITEMS[3]="LOW_TEMP"
+    CONFIG_ITEMS[4]="MIN_SPEED"
+    CONFIG_ITEMS[5]="MAX_SPEED"
+    CONFIG_ITEMS[6]="CHECK_INTERVAL"
+    CONFIG_ITEMS[7]="AUTO_CONTROL"
+    CONFIG_ITEMS[8]="MANUAL_SPEED"
+    CONFIG_ITEMS[9]="ENABLE_LOGGING"
     
     # 配置项描述
     if [ "$LANG" = "cn" ]; then
+        CONFIG_DESCRIPTIONS["LANGUAGE"]="显示语言（en=英文，cn=中文）：界面显示语言"
         CONFIG_DESCRIPTIONS["HIGH_TEMP"]="高温阈值（℃）：达到此温度时风扇全速运行"
         CONFIG_DESCRIPTIONS["LOW_TEMP"]="低温阈值（℃）：低于此温度时风扇最低速运行"
         CONFIG_DESCRIPTIONS["MIN_SPEED"]="最低风扇速度：风扇最低转速（检测范围: $DETECTED_MIN-$DETECTED_MAX）"
@@ -956,6 +1013,7 @@ init_config_items() {
         CONFIG_DESCRIPTIONS["ENABLE_LOGGING"]="启用日志（1=启用，0=禁用）：是否记录日志"
         
         # 推荐值
+        CONFIG_RECOMMENDATIONS["LANGUAGE"]="en/cn（根据偏好选择）"
         CONFIG_RECOMMENDATIONS["HIGH_TEMP"]="65-80（根据硬件调整）"
         CONFIG_RECOMMENDATIONS["LOW_TEMP"]="40-55（通常比室温高10-20℃）"
         CONFIG_RECOMMENDATIONS["MIN_SPEED"]="$DETECTED_MIN（检测到的最小值）"
@@ -965,6 +1023,7 @@ init_config_items() {
         CONFIG_RECOMMENDATIONS["MANUAL_SPEED"]="$(( (DETECTED_MAX - DETECTED_MIN) / 2 + DETECTED_MIN ))（中等速度）"
         CONFIG_RECOMMENDATIONS["ENABLE_LOGGING"]="1（推荐启用）"
     else
+        CONFIG_DESCRIPTIONS["LANGUAGE"]="Display language (en=English, cn=Chinese): Interface display language"
         CONFIG_DESCRIPTIONS["HIGH_TEMP"]="High temperature threshold (°C): Fan runs at max speed at this temperature"
         CONFIG_DESCRIPTIONS["LOW_TEMP"]="Low temperature threshold (°C): Fan runs at min speed below this temperature"
         CONFIG_DESCRIPTIONS["MIN_SPEED"]="Minimum fan speed: Minimum fan rotation speed (detected range: $DETECTED_MIN-$DETECTED_MAX)"
@@ -975,6 +1034,7 @@ init_config_items() {
         CONFIG_DESCRIPTIONS["ENABLE_LOGGING"]="Enable logging (1=enabled, 0=disabled): Whether to log events"
         
         # 推荐值
+        CONFIG_RECOMMENDATIONS["LANGUAGE"]="en/cn (choose based on preference)"
         CONFIG_RECOMMENDATIONS["HIGH_TEMP"]="65-80 (adjust based on hardware)"
         CONFIG_RECOMMENDATIONS["LOW_TEMP"]="40-55 (usually 10-20°C above room temp)"
         CONFIG_RECOMMENDATIONS["MIN_SPEED"]="$DETECTED_MIN (detected minimum)"
@@ -986,14 +1046,176 @@ init_config_items() {
     fi
 }
 
-# 显示配置菜单
+# 计算字符串的显示宽度（考虑中文字符）
+get_display_width() {
+    local str="$1"
+    local width=0
+    local i
+    
+    # 遍历字符串的每个字符
+    for ((i = 0; i < ${#str}; i++)); do
+        local char="${str:$i:1}"
+        # 判断是否为中文字符（Unicode编码大于127）
+        if [[ $(printf "%d" "'$char") -gt 127 ]]; then
+            # 中文字符占2个宽度
+            width=$((width + 2))
+        else
+            # 英文字符占1个宽度
+            width=$((width + 1))
+        fi
+    done
+    
+    echo $width
+}
+
+# 截断字符串到指定显示宽度
+truncate_to_width() {
+    local str="$1"
+    local max_width="$2"
+    local truncated=""
+    local current_width=0
+    local i
+    
+    # 如果最大宽度小于等于0，直接返回空字符串
+    if [ $max_width -le 0 ]; then
+        echo ""
+        return
+    fi
+    
+    # 遍历字符串的每个字符
+    for ((i = 0; i < ${#str}; i++)); do
+        local char="${str:$i:1}"
+        local char_width=1
+        
+        # 判断是否为中文字符
+        if [[ $(printf "%d" "'$char") -gt 127 ]]; then
+            char_width=2
+        fi
+        
+        # 如果添加这个字符会超出最大宽度
+        if [ $((current_width + char_width)) -gt $max_width ]; then
+            # 如果还有空间添加"..."
+            if [ $((current_width + 3)) -le $max_width ]; then
+                truncated="${truncated}..."
+                current_width=$((current_width + 3))
+            fi
+            break
+        fi
+        
+        # 添加字符到结果
+        truncated="${truncated}${char}"
+        current_width=$((current_width + char_width))
+    done
+    
+    echo "$truncated"
+}
+
+# 显示表格（处理中文对齐问题）
+display_table() {
+    local headers=("${!1}")  # 表头数组
+    local data_rows=("${!2}")  # 数据行数组
+    local max_width=80
+    local min_col_width=3
+    
+    # 计算每列的最大显示宽度
+    local col_count=${#headers[@]}
+    declare -a col_widths
+    
+    # 初始化每列宽度为表头宽度
+    for ((i=0; i<col_count; i++)); do
+        col_widths[$i]=$(get_display_width "${headers[$i]}")
+    done
+    
+    # 遍历数据行，更新最大宽度
+    for row in "${data_rows[@]}"; do
+        # 将行数据分割为列
+        IFS='|' read -ra cols <<< "$row"
+        for ((i=0; i<${#cols[@]}; i++)); do
+            if [ $i -lt $col_count ]; then
+                local width=$(get_display_width "${cols[$i]}")
+                if [ $width -gt ${col_widths[$i]} ]; then
+                    col_widths[$i]=$width
+                fi
+                if [ ${col_widths[$i]} -lt $min_col_width ]; then
+                    col_widths[$i]=$min_col_width
+                fi
+            fi
+        done
+    done
+    
+    # 计算总宽度
+    local total_width=0
+    for width in "${col_widths[@]}"; do
+        total_width=$((total_width + width + 1))  # +1 用于列间空格
+    done
+    
+    # 如果总宽度超过最大宽度，调整最后一列
+    if [ $total_width -gt $max_width ] && [ $col_count -gt 0 ]; then
+        local excess=$((total_width - max_width))
+        col_widths[$((col_count-1))]=$((col_widths[$((col_count-1))] - excess))
+        if [ ${col_widths[$((col_count-1))]} -lt $min_col_width ]; then
+            col_widths[$((col_count-1))]=$min_col_width
+        fi
+    fi
+    
+    # 打印表头
+    for ((i=0; i<col_count; i++)); do
+        printf "%-${col_widths[$i]}s" "${headers[$i]}"
+        printf " "
+    done
+    printf "\n"
+    
+    # 打印表头分隔线
+    for ((i=0; i<col_count; i++)); do
+        printf -- "-%.0s" $(seq 1 ${col_widths[$i]})
+        printf " "
+    done
+    printf "\n"
+    
+    # 打印数据行
+    for row in "${data_rows[@]}"; do
+        IFS='|' read -ra cols <<< "$row"
+        for ((i=0; i<col_count; i++)); do
+            if [ $i -lt ${#cols[@]} ]; then
+                local cell="${cols[$i]}"
+                local width=${col_widths[$i]}
+                
+                # 如果内容超过列宽，截断并添加"..."
+                local display_width=$(get_display_width "$cell")
+                if [ $display_width -gt $width ]; then
+                    cell=$(truncate_to_width "$cell" $width)
+                fi
+                
+                printf "%-${col_widths[$i]}s " "$cell"
+            else
+                printf "%-${col_widths[$i]}s " ""
+            fi
+        done
+        printf "\n"
+    done
+}
+
+# 重新设计 show_config_menu 函数
 show_config_menu() {
     load_config
     init_config_items
     
     local choice=0
+    local config_changed=0  # 跟踪配置是否被修改
+    declare -A original_values  # 保存原始值
     
-    while [ $choice -ne 9 ]; do
+    # 保存原始值用于比较
+    original_values["LANGUAGE"]="$LANG"
+    original_values["HIGH_TEMP"]="$HIGH_TEMP"
+    original_values["LOW_TEMP"]="$LOW_TEMP"
+    original_values["MIN_SPEED"]="$MIN_SPEED"
+    original_values["MAX_SPEED"]="$MAX_SPEED"
+    original_values["CHECK_INTERVAL"]="$CHECK_INTERVAL"
+    original_values["AUTO_CONTROL"]="$AUTO_CONTROL"
+    original_values["MANUAL_SPEED"]="$MANUAL_SPEED"
+    original_values["ENABLE_LOGGING"]="$ENABLE_LOGGING"
+    
+    while true; do
         clear
         echo -e "${CYAN}${SEPARATOR}${NC}"
         echo -e "${CYAN}        ${MSG["config_menu"]}        ${NC}"
@@ -1003,23 +1225,28 @@ show_config_menu() {
         # 显示当前配置
         echo -e "${WHITE}Current Configuration:${NC}"
         echo -e "${WHITE}=====================${NC}"
+        echo ""
         
-        # 表头 - 调整列宽确保完全显示
+        # 准备表头和数据
+        local headers=()
+        local data_rows=()
+        
         if [ "$LANG" = "cn" ]; then
-            printf "%-3s %-12s %-12s %-35s %s\n" "ID" "配置项" "当前值" "说明" "推荐值"
-            printf "%-3s %-12s %-12s %-35s %s\n" "--" "------" "------" "----" "------"
+            headers=("ID" "配置项" "当前值" "说明")
         else
-            printf "%-3s %-15s %-12s %-35s %s\n" "ID" "Config Item" "Current Value" "Description" "Recommended"
-            printf "%-3s %-15s %-12s %-35s %s\n" "--" "----------" "-------------" "-----------" "----------"
+            headers=("ID" "Config Item" "Current Value" "Description")
         fi
         
-        # 配置项列表
-        for i in {1..8}; do
+        # 构建数据行
+        for i in {1..9}; do
             local item="${CONFIG_ITEMS[$i]}"
             local value=""
+            local item_name=""
+            local description=""
             
             # 获取当前值
             case $item in
+                "LANGUAGE") value="$LANG" ;;
                 "HIGH_TEMP") value="$HIGH_TEMP" ;;
                 "LOW_TEMP") value="$LOW_TEMP" ;;
                 "MIN_SPEED") value="$MIN_SPEED" ;;
@@ -1030,9 +1257,10 @@ show_config_menu() {
                 "ENABLE_LOGGING") value="$ENABLE_LOGGING" ;;
             esac
             
-            # 显示配置项
+            # 获取配置项显示名称
             if [ "$LANG" = "cn" ]; then
                 case $item in
+                    "LANGUAGE") item_name="语言设置" ;;
                     "HIGH_TEMP") item_name="高温阈值" ;;
                     "LOW_TEMP") item_name="低温阈值" ;;
                     "MIN_SPEED") item_name="最低速度" ;;
@@ -1042,31 +1270,100 @@ show_config_menu() {
                     "MANUAL_SPEED") item_name="手动速度" ;;
                     "ENABLE_LOGGING") item_name="启用日志" ;;
                 esac
-                
-                printf "%-3d %-12s %-12s %-35s %s\n" "$i" "$item_name" "$value" \
-                    "${CONFIG_DESCRIPTIONS[$item]}" "${CONFIG_RECOMMENDATIONS[$item]}"
             else
-                printf "%-3d %-15s %-12s %-35s %s\n" "$i" "$item" "$value" \
-                    "${CONFIG_DESCRIPTIONS[$item]}" "${CONFIG_RECOMMENDATIONS[$item]}"
+                case $item in
+                    "LANGUAGE") item_name="Language" ;;
+                    *) item_name="$item" ;;
+                esac
             fi
+            
+            # 获取描述
+            description="${CONFIG_DESCRIPTIONS[$item]}"
+            
+            # 构建数据行（使用 | 作为列分隔符）
+            data_rows+=("$i|$item_name|$value|$description")
         done
         
+        # 显示表格
+        display_table headers[@] data_rows[@]
+        
         echo ""
-        echo "9. ${MSG["config_exit"]}"
+        echo "0. ${MSG["config_exit"]}"
         echo ""
         
+        # 显示配置修改提示
+        if [ $config_changed -eq 1 ]; then
+            if [ "$LANG" = "cn" ]; then
+                echo -e "${YELLOW}⚠ 配置已修改，请选择0保存并退出${NC}"
+            else
+                echo -e "${YELLOW}⚠ Configuration modified, select 0 to save and exit${NC}"
+            fi
+        fi
+        
         if [ "$LANG" = "cn" ]; then
-            read -p "请选择配置项 (1-9): " choice
+            read -p "请选择配置项 (0-9): " choice
         else
-            read -p "Select config item (1-9): " choice
+            read -p "Select config item (0-9): " choice
         fi
         
         case $choice in
-            1|2|3|4|5|6|7|8)
-                config_item "${CONFIG_ITEMS[$choice]}"
+            1|2|3|4|5|6|7|8|9)
+                if config_item "${CONFIG_ITEMS[$choice]}"; then
+                    config_changed=1
+                    # 如果修改了语言，需要重新初始化配置项描述
+                    if [ "${CONFIG_ITEMS[$choice]}" = "LANGUAGE" ]; then
+                        init_config_items
+                        # 重新加载消息系统，确保后续提示使用新语言
+                        set_language
+                    fi
+                fi
                 ;;
-            9)
-                save_configuration
+            0)
+                # 退出配置菜单前，检查配置是否被修改
+                # 需要比较当前值和原始值
+                local any_changed=0
+                
+                # 检查语言是否改变
+                if [ "$LANG" != "${original_values["LANGUAGE"]}" ]; then
+                    any_changed=1
+                fi
+                
+                # 检查其他配置项是否改变
+                for item in "${CONFIG_ITEMS[@]}"; do
+                    if [ "$item" != "LANGUAGE" ]; then
+                        local current_value=""
+                        local original_value="${original_values[$item]}"
+                        
+                        case $item in
+                            "HIGH_TEMP") current_value="$HIGH_TEMP" ;;
+                            "LOW_TEMP") current_value="$LOW_TEMP" ;;
+                            "MIN_SPEED") current_value="$MIN_SPEED" ;;
+                            "MAX_SPEED") current_value="$MAX_SPEED" ;;
+                            "CHECK_INTERVAL") current_value="$CHECK_INTERVAL" ;;
+                            "AUTO_CONTROL") current_value="$AUTO_CONTROL" ;;
+                            "MANUAL_SPEED") current_value="$MANUAL_SPEED" ;;
+                            "ENABLE_LOGGING") current_value="$ENABLE_LOGGING" ;;
+                        esac
+                        
+                        if [ "$current_value" != "$original_value" ]; then
+                            any_changed=1
+                            break
+                        fi
+                    fi
+                done
+                
+                if [ $any_changed -eq 1 ] || [ $config_changed -eq 1 ]; then
+                    save_configuration
+                else
+                    # 没有修改，直接退出
+                    if [ "$LANG" = "cn" ]; then
+                        echo "配置未修改，直接退出"
+                    else
+                        echo "No changes made, exiting"
+                    fi
+                    sleep 2
+                fi
+                break
                 ;;
             *)
                 if [ "$LANG" = "cn" ]; then
@@ -1085,9 +1382,11 @@ config_item() {
     local item="$1"
     local current_value=""
     local new_value=""
+    local changed=0  # 返回是否修改了配置
     
     # 获取当前值
     case $item in
+        "LANGUAGE") current_value="$LANG" ;;
         "HIGH_TEMP") current_value="$HIGH_TEMP" ;;
         "LOW_TEMP") current_value="$LOW_TEMP" ;;
         "MIN_SPEED") current_value="$MIN_SPEED" ;;
@@ -1122,13 +1421,62 @@ config_item() {
     if [ -n "$new_value" ]; then
         # 验证输入
         case $item in
+            "LANGUAGE")
+                # 规范化输入
+                local normalized_new_value="$new_value"
+                if [ "$new_value" = "zh" ] || [ "$new_value" = "ZH" ]; then
+                    normalized_new_value="cn"
+                elif [ "$new_value" = "EN" ]; then
+                    normalized_new_value="en"
+                fi
+                
+                if [ "$normalized_new_value" = "en" ] || [ "$normalized_new_value" = "cn" ]; then
+                    if [ "$normalized_new_value" != "$current_value" ]; then
+                        # 记录原始语言用于比较
+                        local original_lang="$LANG"
+                        
+                        # 设置新语言
+                        LANG="$normalized_new_value"
+                        set_language
+                        
+                        # 清除命令行设置标记，因为用户通过菜单修改了语言
+                        LANG_SET_BY_CLI=0
+                        
+                        changed=1
+                        if [ "$LANG" = "cn" ]; then
+                            echo "✅ 语言已更新为: $normalized_new_value"
+                            echo "注意：界面语言已更新"
+                        else
+                            echo "✅ Language updated to: $normalized_new_value"
+                            echo "Note: Interface language has been updated"
+                        fi
+                    else
+                        if [ "$LANG" = "cn" ]; then
+                            echo "值未改变"
+                        else
+                            echo "Value unchanged"
+                        fi
+                    fi
+                else
+                    show_msg "invalid_input"
+                fi
+                ;;
             "HIGH_TEMP"|"LOW_TEMP")
                 if [[ "$new_value" =~ ^[0-9]+$ ]] && [ $new_value -ge 0 ] && [ $new_value -le 120 ]; then
-                    eval "$item=\"$new_value\""
-                    if [ "$LANG" = "cn" ]; then
-                        echo "✅ $item 已更新为: $new_value"
+                    if [ "$new_value" != "$current_value" ]; then
+                        eval "$item=\"$new_value\""
+                        changed=1
+                        if [ "$LANG" = "cn" ]; then
+                            echo "✅ $item 已更新为: $new_value"
+                        else
+                            echo "✅ $item updated to: $new_value"
+                        fi
                     else
-                        echo "✅ $item updated to: $new_value"
+                        if [ "$LANG" = "cn" ]; then
+                            echo "值未改变"
+                        else
+                            echo "Value unchanged"
+                        fi
                     fi
                 else
                     show_msg "invalid_input"
@@ -1137,11 +1485,20 @@ config_item() {
             "MIN_SPEED"|"MAX_SPEED"|"MANUAL_SPEED")
                 # 检查是否在检测到的范围内
                 if [[ "$new_value" =~ ^[0-9]+$ ]] && [ $new_value -ge $DETECTED_MIN ] && [ $new_value -le $DETECTED_MAX ]; then
-                    eval "$item=\"$new_value\""
-                    if [ "$LANG" = "cn" ]; then
-                        echo "✅ $item 已更新为: $new_value"
+                    if [ "$new_value" != "$current_value" ]; then
+                        eval "$item=\"$new_value\""
+                        changed=1
+                        if [ "$LANG" = "cn" ]; then
+                            echo "✅ $item 已更新为: $new_value"
+                        else
+                            echo "✅ $item updated to: $new_value"
+                        fi
                     else
-                        echo "✅ $item updated to: $new_value"
+                        if [ "$LANG" = "cn" ]; then
+                            echo "值未改变"
+                        else
+                            echo "Value unchanged"
+                        fi
                     fi
                 else
                     if [ "$LANG" = "cn" ]; then
@@ -1154,11 +1511,20 @@ config_item() {
                 ;;
             "CHECK_INTERVAL")
                 if [[ "$new_value" =~ ^[0-9]+$ ]] && [ $new_value -ge 1 ] && [ $new_value -le 60 ]; then
-                    eval "$item=\"$new_value\""
-                    if [ "$LANG" = "cn" ]; then
-                        echo "✅ $item 已更新为: $new_value"
+                    if [ "$new_value" != "$current_value" ]; then
+                        eval "$item=\"$new_value\""
+                        changed=1
+                        if [ "$LANG" = "cn" ]; then
+                            echo "✅ $item 已更新为: $new_value"
+                        else
+                            echo "✅ $item updated to: $new_value"
+                        fi
                     else
-                        echo "✅ $item updated to: $new_value"
+                        if [ "$LANG" = "cn" ]; then
+                            echo "值未改变"
+                        else
+                            echo "Value unchanged"
+                        fi
                     fi
                 else
                     show_msg "invalid_input"
@@ -1166,11 +1532,20 @@ config_item() {
                 ;;
             "AUTO_CONTROL"|"ENABLE_LOGGING")
                 if [[ "$new_value" =~ ^[01]$ ]]; then
-                    eval "$item=\"$new_value\""
-                    if [ "$LANG" = "cn" ]; then
-                        echo "✅ $item 已更新为: $new_value"
+                    if [ "$new_value" != "$current_value" ]; then
+                        eval "$item=\"$new_value\""
+                        changed=1
+                        if [ "$LANG" = "cn" ]; then
+                            echo "✅ $item 已更新为: $new_value"
+                        else
+                            echo "✅ $item updated to: $new_value"
+                        fi
                     else
-                        echo "✅ $item updated to: $new_value"
+                        if [ "$LANG" = "cn" ]; then
+                            echo "值未改变"
+                        else
+                            echo "Value unchanged"
+                        fi
                     fi
                 else
                     show_msg "invalid_input"
@@ -1186,6 +1561,7 @@ config_item() {
     fi
     
     sleep 2
+    return $changed  # 返回修改状态
 }
 
 # 保存配置
@@ -1193,6 +1569,7 @@ save_configuration() {
     echo ""
     echo -e "${CYAN}${SEPARATOR}${NC}"
     
+    # 询问是否保存配置
     if [ "$LANG" = "cn" ]; then
         read -p "是否保存配置更改？(y/n): " save
     else
@@ -1205,11 +1582,17 @@ save_configuration() {
             cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
         fi
         
-        # 创建新配置文件
+        # 获取当前语言（可能是通过config菜单修改的）
+        local current_lang="$LANG"
+        
+        # 创建新配置文件，包含语言设置
         cat > "$CONFIG_FILE" << EOF
 # ============================================
 # Fan Control Daemon Configuration
 # ============================================
+
+# Language setting (en=English, cn=Chinese)
+LANGUAGE="$current_lang"
 
 # Temperature thresholds (Celsius)
 HIGH_TEMP=$HIGH_TEMP      # High temperature threshold, fan runs at max speed
@@ -1678,16 +2061,53 @@ start_daemon() {
         DAEMON_MODE=1
         log_message "INFO" "Fan control daemon started"
         
+        # 启动时立即应用配置
+        local max_temp=$(get_max_temperature)
+        local initial_speed=0
+        
+        if [ $AUTO_CONTROL -eq 1 ]; then
+            # 自动模式：根据当前温度计算速度
+            initial_speed=$(calculate_fan_speed $max_temp)
+            log_message "INFO" "Starting in AUTO mode, initial speed: ${initial_speed} (temp: ${max_temp}°C)"
+        else
+            # 手动模式：使用固定速度
+            initial_speed=$MANUAL_SPEED
+            log_message "INFO" "Starting in MANUAL mode, fixed speed: ${initial_speed}"
+        fi
+        
+        # 应用初始速度
+        if set_fan_speed $initial_speed; then
+            log_message "INFO" "Initial fan speed set to: ${initial_speed}"
+        else
+            log_message "ERROR" "Failed to set initial fan speed: ${initial_speed}"
+        fi
+        
+        # 主控制循环
         while true; do
+            load_config  # 每次循环重新加载配置，支持热更新
+            
             local max_temp=$(get_max_temperature)
             if [ $max_temp -gt 0 ]; then
-                local new_speed=$(calculate_fan_speed $max_temp)
-                if [ $new_speed -ne $CURRENT_SPEED ]; then
-                    if set_fan_speed $new_speed; then
-                        log_message "INFO" "Temp: ${max_temp}°C, Fan: ${new_speed}"
+                if [ $AUTO_CONTROL -eq 1 ]; then
+                    # 自动控制模式
+                    local new_speed=$(calculate_fan_speed $max_temp)
+                    if [ $new_speed -ne $CURRENT_SPEED ]; then
+                        if set_fan_speed $new_speed; then
+                            log_message "INFO" "Temp: ${max_temp}°C, Fan: ${new_speed}"
+                        fi
+                    fi
+                else
+                    # 手动控制模式
+                    if [ $MANUAL_SPEED -ne $CURRENT_SPEED ]; then
+                        if set_fan_speed $MANUAL_SPEED; then
+                            log_message "INFO" "Manual mode, Fan: ${MANUAL_SPEED}"
+                        fi
                     fi
                 fi
+            else
+                log_message "WARNING" "Could not read temperature"
             fi
+            
             sleep $CHECK_INTERVAL
         done
     ) &
@@ -1777,14 +2197,59 @@ show_help() {
     fi
 }
 
+# 从参数列表中移除语言参数
+clean_language_args() {
+    local cleaned_args=()
+    local skip_next=0
+    
+    for arg in "$@"; do
+        if [ $skip_next -eq 1 ]; then
+            skip_next=0
+            continue
+        fi
+        
+        if [ "$arg" = "--lang" ] || [ "$arg" = "-l" ]; then
+            skip_next=1
+            continue
+        fi
+        
+        cleaned_args+=("$arg")
+    done
+    
+    echo "${cleaned_args[@]}"
+}
+
 # ============================================
 # 主函数
 # ============================================
 
 main() {
-    # 初始化语言
+    # 初始化语言（按照优先级：命令行参数 > 配置文件 > 默认值）
     init_language "$@"
     
+    # 移除命令行中的语言参数，避免影响后续处理
+    local args=()
+    local skip_next=0
+    for ((i=1; i<=$#; i++)); do
+        local arg="${!i}"
+        
+        if [ $skip_next -eq 1 ]; then
+            skip_next=0
+            continue
+        fi
+        
+        if [ "$arg" = "--lang" ] || [ "$arg" = "-l" ]; then
+            skip_next=1
+            continue
+        fi
+        
+        args+=("$arg")
+    done
+    
+    # 使用处理后的参数
+    set -- "${args[@]}"
+    
+    # 根据命令执行相应操作
     case "$1" in
         install)
             install_fan_control
