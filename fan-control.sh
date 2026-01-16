@@ -102,6 +102,18 @@ declare -A EN_MSG=(
     ["detect_use_cache"]="Using cached fan range."
     ["range_cache_file"]="/tmp/fan_range.cache"
     ["no_fan_device"]="No fan device found for detection"
+    ["monitor_title"]="REAL-TIME FAN CONTROL MONITOR"
+    ["monitor_time"]="Time"
+    ["monitor_max_temp"]="Max Temperature"
+    ["monitor_fan_speed"]="Fan Speed"
+    ["monitor_control_mode"]="Control Mode"
+    ["monitor_fan_range"]="Fan Range"
+    ["monitor_temperature"]="Temperature"
+    ["monitor_fan_speed_bar"]="Fan Speed"
+    ["monitor_all_sensors"]="All Temperature Sensors"
+    ["monitor_press_exit"]="Press Ctrl+C to exit"
+    ["mode_auto"]="AUTO"
+    ["mode_manual"]="MANUAL"    
 )
 
 # 中文消息
@@ -194,6 +206,18 @@ declare -A CN_MSG=(
     ["detect_use_cache"]="使用缓存的风扇范围。"
     ["range_cache_file"]="/tmp/fan_range.cache"
     ["no_fan_device"]="未找到风扇设备进行检测"
+    ["monitor_title"]="实时风扇控制监控"
+    ["monitor_time"]="时间"
+    ["monitor_max_temp"]="最高温度"
+    ["monitor_fan_speed"]="风扇速度"
+    ["monitor_control_mode"]="控制模式"
+    ["monitor_fan_range"]="风扇范围"
+    ["monitor_temperature"]="温度"
+    ["monitor_fan_speed_bar"]="风扇速度"
+    ["monitor_all_sensors"]="所有温度传感器"
+    ["monitor_press_exit"]="按 Ctrl+C 退出"
+    ["mode_auto"]="自动"
+    ["mode_manual"]="手动"
 )
 
 # 设置语言
@@ -1046,162 +1070,48 @@ init_config_items() {
     fi
 }
 
-# 计算字符串的显示宽度（考虑中文字符）
-get_display_width() {
-    local str="$1"
-    local width=0
-    local i
+# 检查配置是否被修改
+check_config_changed() {
+    local array_name=$1  # 接收关联数组的名称
+    local changed=0
     
-    # 遍历字符串的每个字符
-    for ((i = 0; i < ${#str}; i++)); do
-        local char="${str:$i:1}"
-        # 判断是否为中文字符（Unicode编码大于127）
-        if [[ $(printf "%d" "'$char") -gt 127 ]]; then
-            # 中文字符占2个宽度
-            width=$((width + 2))
-        else
-            # 英文字符占1个宽度
-            width=$((width + 1))
-        fi
-    done
+    # 使用间接引用访问关联数组
+    eval "declare -A orig_vals=(\"\${$array_name[@]}\")"
     
-    echo $width
-}
-
-# 截断字符串到指定显示宽度
-truncate_to_width() {
-    local str="$1"
-    local max_width="$2"
-    local truncated=""
-    local current_width=0
-    local i
-    
-    # 如果最大宽度小于等于0，直接返回空字符串
-    if [ $max_width -le 0 ]; then
-        echo ""
-        return
-    fi
-    
-    # 遍历字符串的每个字符
-    for ((i = 0; i < ${#str}; i++)); do
-        local char="${str:$i:1}"
-        local char_width=1
+    # 检查所有配置项是否改变
+    for item in "${!orig_vals[@]}"; do
+        local current_value=""
+        local original_value="${orig_vals[$item]}"
         
-        # 判断是否为中文字符
-        if [[ $(printf "%d" "'$char") -gt 127 ]]; then
-            char_width=2
-        fi
+        # 获取当前值
+        case $item in
+            "LANGUAGE") current_value="$LANG" ;;
+            "HIGH_TEMP") current_value="$HIGH_TEMP" ;;
+            "LOW_TEMP") current_value="$LOW_TEMP" ;;
+            "MIN_SPEED") current_value="$MIN_SPEED" ;;
+            "MAX_SPEED") current_value="$MAX_SPEED" ;;
+            "CHECK_INTERVAL") current_value="$CHECK_INTERVAL" ;;
+            "AUTO_CONTROL") current_value="$AUTO_CONTROL" ;;
+            "MANUAL_SPEED") current_value="$MANUAL_SPEED" ;;
+            "ENABLE_LOGGING") current_value="$ENABLE_LOGGING" ;;
+            *) continue ;;  # 跳过不认识的键
+        esac
         
-        # 如果添加这个字符会超出最大宽度
-        if [ $((current_width + char_width)) -gt $max_width ]; then
-            # 如果还有空间添加"..."
-            if [ $((current_width + 3)) -le $max_width ]; then
-                truncated="${truncated}..."
-                current_width=$((current_width + 3))
-            fi
+        if [ "$current_value" != "$original_value" ]; then
+            changed=1
             break
         fi
-        
-        # 添加字符到结果
-        truncated="${truncated}${char}"
-        current_width=$((current_width + char_width))
     done
     
-    echo "$truncated"
+    return $changed
 }
 
-# 显示表格（处理中文对齐问题）
-display_table() {
-    local headers=("${!1}")  # 表头数组
-    local data_rows=("${!2}")  # 数据行数组
-    local max_width=80
-    local min_col_width=3
-    
-    # 计算每列的最大显示宽度
-    local col_count=${#headers[@]}
-    declare -a col_widths
-    
-    # 初始化每列宽度为表头宽度
-    for ((i=0; i<col_count; i++)); do
-        col_widths[$i]=$(get_display_width "${headers[$i]}")
-    done
-    
-    # 遍历数据行，更新最大宽度
-    for row in "${data_rows[@]}"; do
-        # 将行数据分割为列
-        IFS='|' read -ra cols <<< "$row"
-        for ((i=0; i<${#cols[@]}; i++)); do
-            if [ $i -lt $col_count ]; then
-                local width=$(get_display_width "${cols[$i]}")
-                if [ $width -gt ${col_widths[$i]} ]; then
-                    col_widths[$i]=$width
-                fi
-                if [ ${col_widths[$i]} -lt $min_col_width ]; then
-                    col_widths[$i]=$min_col_width
-                fi
-            fi
-        done
-    done
-    
-    # 计算总宽度
-    local total_width=0
-    for width in "${col_widths[@]}"; do
-        total_width=$((total_width + width + 1))  # +1 用于列间空格
-    done
-    
-    # 如果总宽度超过最大宽度，调整最后一列
-    if [ $total_width -gt $max_width ] && [ $col_count -gt 0 ]; then
-        local excess=$((total_width - max_width))
-        col_widths[$((col_count-1))]=$((col_widths[$((col_count-1))] - excess))
-        if [ ${col_widths[$((col_count-1))]} -lt $min_col_width ]; then
-            col_widths[$((col_count-1))]=$min_col_width
-        fi
-    fi
-    
-    # 打印表头
-    for ((i=0; i<col_count; i++)); do
-        printf "%-${col_widths[$i]}s" "${headers[$i]}"
-        printf " "
-    done
-    printf "\n"
-    
-    # 打印表头分隔线
-    for ((i=0; i<col_count; i++)); do
-        printf -- "-%.0s" $(seq 1 ${col_widths[$i]})
-        printf " "
-    done
-    printf "\n"
-    
-    # 打印数据行
-    for row in "${data_rows[@]}"; do
-        IFS='|' read -ra cols <<< "$row"
-        for ((i=0; i<col_count; i++)); do
-            if [ $i -lt ${#cols[@]} ]; then
-                local cell="${cols[$i]}"
-                local width=${col_widths[$i]}
-                
-                # 如果内容超过列宽，截断并添加"..."
-                local display_width=$(get_display_width "$cell")
-                if [ $display_width -gt $width ]; then
-                    cell=$(truncate_to_width "$cell" $width)
-                fi
-                
-                printf "%-${col_widths[$i]}s " "$cell"
-            else
-                printf "%-${col_widths[$i]}s " ""
-            fi
-        done
-        printf "\n"
-    done
-}
-
-# 重新设计 show_config_menu 函数
+# 显示配置菜单（使用check_config_changed函数）
 show_config_menu() {
     load_config
     init_config_items
     
     local choice=0
-    local config_changed=0  # 跟踪配置是否被修改
     declare -A original_values  # 保存原始值
     
     # 保存原始值用于比较
@@ -1215,7 +1125,12 @@ show_config_menu() {
     original_values["MANUAL_SPEED"]="$MANUAL_SPEED"
     original_values["ENABLE_LOGGING"]="$ENABLE_LOGGING"
     
-    while true; do
+    local LOOP=true
+    while $LOOP; do
+        # 检查配置是否被修改
+        check_config_changed original_values
+        local config_changed=$?
+        
         clear
         echo -e "${CYAN}${SEPARATOR}${NC}"
         echo -e "${CYAN}        ${MSG["config_menu"]}        ${NC}"
@@ -1223,26 +1138,27 @@ show_config_menu() {
         echo ""
         
         # 显示当前配置
-        echo -e "${WHITE}Current Configuration:${NC}"
-        echo -e "${WHITE}=====================${NC}"
-        echo ""
-        
-        # 准备表头和数据
-        local headers=()
-        local data_rows=()
-        
         if [ "$LANG" = "cn" ]; then
-            headers=("ID" "配置项" "当前值" "说明")
+            # 中文表头
+            echo -e "${WHITE}当前配置信息:${NC}"
+            echo -e "${WHITE}=====================${NC}"
+            echo ""
+            echo "ID  配置项           当前值         配置名称"
+            echo "--  --------------  -------------  ------------------------------------------------"
         else
-            headers=("ID" "Config Item" "Current Value" "Description")
+            echo -e "${WHITE}Current Configuration:${NC}"
+            echo -e "${WHITE}=====================${NC}"
+            echo ""
+            # 英文表头
+            echo "ID  CONFIG ITEM     CURRENT VALUE  DESCRIPTION"
+            echo "--  --------------  -------------  ------------------------------------------------"
         fi
         
-        # 构建数据行
+        # 显示配置项列表
         for i in {1..9}; do
             local item="${CONFIG_ITEMS[$i]}"
             local value=""
             local item_name=""
-            local description=""
             
             # 获取当前值
             case $item in
@@ -1272,20 +1188,20 @@ show_config_menu() {
                 esac
             else
                 case $item in
-                    "LANGUAGE") item_name="Language" ;;
-                    *) item_name="$item" ;;
+                    "LANGUAGE") item_name="Display Language" ;;
+                    "HIGH_TEMP") item_name="High Temperature Threshold" ;;
+                    "LOW_TEMP") item_name="Low Temperature Threshold" ;;
+                    "MIN_SPEED") item_name="Minimum Fan Speed" ;;
+                    "MAX_SPEED") item_name="Maximum Fan Speed" ;;
+                    "CHECK_INTERVAL") item_name="Check Interval (seconds)" ;;
+                    "AUTO_CONTROL") item_name="Auto Control (1=auto, 0=manual)" ;;
+                    "MANUAL_SPEED") item_name="Manual Speed Setting" ;;
+                    "ENABLE_LOGGING") item_name="Enable Logging (1=enabled, 0=disabled)" ;;
                 esac
             fi
             
-            # 获取描述
-            description="${CONFIG_DESCRIPTIONS[$item]}"
-            
-            # 构建数据行（使用 | 作为列分隔符）
-            data_rows+=("$i|$item_name|$value|$description")
+            printf "%-2s  %-14s  %-13s  %-48s\n" "$i" "$item" "$value" "$item_name"
         done
-        
-        # 显示表格
-        display_table headers[@] data_rows[@]
         
         echo ""
         echo "0. ${MSG["config_exit"]}"
@@ -1308,51 +1224,46 @@ show_config_menu() {
         
         case $choice in
             1|2|3|4|5|6|7|8|9)
-                if config_item "${CONFIG_ITEMS[$choice]}"; then
-                    config_changed=1
-                    # 如果修改了语言，需要重新初始化配置项描述
-                    if [ "${CONFIG_ITEMS[$choice]}" = "LANGUAGE" ]; then
-                        init_config_items
-                        # 重新加载消息系统，确保后续提示使用新语言
-                        set_language
-                    fi
+                # 调用config_item修改配置
+                config_item "${CONFIG_ITEMS[$choice]}"
+                # 如果修改了语言，需要重新初始化配置项描述
+                if [ "${CONFIG_ITEMS[$choice]}" = "LANGUAGE" ]; then
+                    init_config_items
+                    # 重新加载消息系统，确保后续提示使用新语言
+                    set_language
                 fi
                 ;;
             0)
-                # 退出配置菜单前，检查配置是否被修改
-                # 需要比较当前值和原始值
-                local any_changed=0
-                
-                # 检查语言是否改变
-                if [ "$LANG" != "${original_values["LANGUAGE"]}" ]; then
-                    any_changed=1
-                fi
-                
-                # 检查其他配置项是否改变
-                for item in "${CONFIG_ITEMS[@]}"; do
-                    if [ "$item" != "LANGUAGE" ]; then
-                        local current_value=""
-                        local original_value="${original_values[$item]}"
-                        
-                        case $item in
-                            "HIGH_TEMP") current_value="$HIGH_TEMP" ;;
-                            "LOW_TEMP") current_value="$LOW_TEMP" ;;
-                            "MIN_SPEED") current_value="$MIN_SPEED" ;;
-                            "MAX_SPEED") current_value="$MAX_SPEED" ;;
-                            "CHECK_INTERVAL") current_value="$CHECK_INTERVAL" ;;
-                            "AUTO_CONTROL") current_value="$AUTO_CONTROL" ;;
-                            "MANUAL_SPEED") current_value="$MANUAL_SPEED" ;;
-                            "ENABLE_LOGGING") current_value="$ENABLE_LOGGING" ;;
-                        esac
-                        
-                        if [ "$current_value" != "$original_value" ]; then
-                            any_changed=1
-                            break
-                        fi
+                # 退出前再次检查配置是否被修改（确保状态最新）
+                LOOP=false
+                local changed=0
+                    
+                # 检查所有配置项是否改变
+                for item in "${!original_values[@]}"; do
+                    local current_value=""
+                    local original_value="${original_values[$item]}"
+                    
+                    # 获取当前值
+                    case $item in
+                        "LANGUAGE") current_value="$LANG" ;;
+                        "HIGH_TEMP") current_value="$HIGH_TEMP" ;;
+                        "LOW_TEMP") current_value="$LOW_TEMP" ;;
+                        "MIN_SPEED") current_value="$MIN_SPEED" ;;
+                        "MAX_SPEED") current_value="$MAX_SPEED" ;;
+                        "CHECK_INTERVAL") current_value="$CHECK_INTERVAL" ;;
+                        "AUTO_CONTROL") current_value="$AUTO_CONTROL" ;;
+                        "MANUAL_SPEED") current_value="$MANUAL_SPEED" ;;
+                        "ENABLE_LOGGING") current_value="$ENABLE_LOGGING" ;;
+                        *) continue ;;  # 跳过不认识的键
+                    esac
+                    
+                    if [ "$current_value" != "$original_value" ]; then
+                        changed=1
+                        break
                     fi
                 done
-                
-                if [ $any_changed -eq 1 ] || [ $config_changed -eq 1 ]; then
+
+                if [ $changed -eq 1 ]; then
                     save_configuration
                 else
                     # 没有修改，直接退出
@@ -1894,20 +1805,20 @@ show_monitor() {
         # 清屏并显示
         clear
         echo -e "${CYAN}${SEPARATOR}${NC}"
-        echo -e "${CYAN}    REAL-TIME FAN CONTROL MONITOR    ${NC}"
+        echo -e "${CYAN}    ${MSG["monitor_title"]}    ${NC}"
         echo -e "${CYAN}${SEPARATOR}${NC}"
         echo ""
         
         # 基本信息
-        echo -e "${WHITE}Time:${NC} $(date '+%H:%M:%S')"
-        echo -e "${WHITE}Max Temperature:${NC} $max_temp°C"
-        echo -e "${WHITE}Fan Speed:${NC} $fan_status (${fan_percent}%)"
-        echo -e "${WHITE}Control Mode:${NC} $(if [ $AUTO_CONTROL -eq 1 ]; then echo "AUTO"; else echo "MANUAL"; fi)"
-        echo -e "${WHITE}Fan Range:${NC} $DETECTED_MIN-$DETECTED_MAX"
+        echo -e "${WHITE}${MSG["monitor_time"]}:${NC} $(date '+%H:%M:%S')"
+        echo -e "${WHITE}${MSG["monitor_max_temp"]}:${NC} $max_temp°C"
+        echo -e "${WHITE}${MSG["monitor_fan_speed"]}:${NC} $fan_status (${fan_percent}%)"
+        echo -e "${WHITE}${MSG["monitor_control_mode"]}:${NC} $(if [ $AUTO_CONTROL -eq 1 ]; then echo "${MSG["mode_auto"]}"; else echo "${MSG["mode_manual"]}"; fi)"
+        echo -e "${WHITE}${MSG["monitor_fan_range"]}:${NC} $DETECTED_MIN-$DETECTED_MAX"
         echo ""
         
         # 温度条
-        echo -e "${WHITE}Temperature:${NC}"
+        echo -e "${WHITE}${MSG["monitor_temperature"]}:${NC}"
         local temp_bar_width=30
         local temp_pos=$(( (max_temp - LOW_TEMP) * temp_bar_width / (HIGH_TEMP - LOW_TEMP) ))
         if [ $temp_pos -lt 0 ]; then temp_pos=0; fi
@@ -1931,7 +1842,7 @@ show_monitor() {
         
         # 风扇速度条
         if [ "$fan_status" != "N/A" ] && [ $fan_percent -ge 0 ]; then
-            echo -e "${WHITE}Fan Speed:${NC}"
+            echo -e "${WHITE}${MSG["monitor_fan_speed_bar"]}:${NC}"
             local speed_bar_width=30
             local speed_pos=$((fan_percent * speed_bar_width / 100))
             
@@ -1956,13 +1867,13 @@ show_monitor() {
         # 显示所有温度传感器
         local temps=$(get_all_temperatures)
         if [ -n "$temps" ]; then
-            echo -e "${WHITE}All Temperature Sensors:${NC}"
+            echo -e "${WHITE}${MSG["monitor_all_sensors"]}:${NC}"
             echo -e "$temps"
         fi
         
         echo ""
         echo -e "${CYAN}${SEPARATOR}${NC}"
-        echo "Press Ctrl+C to exit"
+        echo "${MSG["monitor_press_exit"]}"
         echo -e "${CYAN}${SEPARATOR}${NC}"
         
         sleep 2
