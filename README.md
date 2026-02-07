@@ -21,7 +21,7 @@ A complete, intelligent fan control daemon for ARM-based Single Board Computers 
 
 ```bash
 # Download the script
-wget -O fan-control.sh https://raw.githubusercontent.com/yourusername/fan-control/main/fan-control.sh
+wget -O fan-control.sh https://raw.githubusercontent.com/robinhoo1973/fan-control/main/fan-control.sh
 chmod +x fan-control.sh
 
 # Install with automatic fan range detection
@@ -190,7 +190,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ```bash
 # 下载脚本
-wget -O fan-control.sh https://raw.githubusercontent.com/yourusername/fan-control/main/fan-control.sh
+wget -O fan-control.sh https://raw.githubusercontent.com/robinhoo1973/fan-control/main/fan-control.sh
 chmod +x fan-control.sh
 
 # 安装并自动检测风扇范围
